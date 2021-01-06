@@ -1,0 +1,133 @@
+a general purpose generic firewall/penaltybox facility, implemented as an embeddable, kernel-compatible library
+
+  inspirations are the Linux kernel iptables facility and the perl-based fail2ban facility.
+
+  works with IPv4, IPv6, and any other addressing scheme loosely compatible with CIDR semantics.
+
+  thread-safe using readonly and readwrite (mutex) locks on tables, and simple mutexes on entries.
+
+  dynamics are configured by loading a policy into the library
+
+    * grammar using yacc/bison?
+
+    * configuration is mainly a list of policy rules.
+
+    * static family-address-protocol-port rules can also be configured.
+
+    * global parameters
+
+      * maximum dynamic memory to allocate
+
+  rule table:
+
+    * stored in a red-black table keyed on keyword (arbitrary null-termed), family (two bytes), proto (two bytes), port (two bytes), and a unique rule ID (four bytes).
+      * wildcards are allowed for family, proto, and port, but all fields to the right of a first wildcard must also be wildcards.
+    * keywords needn't be unique -- if multiple rules share a keyword, they are all checked when an event is received with matching attributes.
+    * each rule has action parameters that control behavior of dynamic rules in endpoint table:
+      * number of address prefix bits (CIDR-style), or full address, for building endpoint table key
+      * number of matches before triggering
+      * disposition to impose when triggered
+      * duration of that disposition
+      * dynamic state of rule itself
+        * hit statistics
+    * rule table also has stub entries for each rule, keyed on a reserved keyword and the unique rule ID, for efficient references in endpoint table (see below).
+    * refcount of endpoint table ents referring to each rule
+
+  action table:
+
+    * LHS is unique name of action and an internally generated monotonically ascending version number
+    * pointer to callback handler function
+      * callback takes sockaddr of each end, name of action
+
+    * refcount of rule table ents referring to each action
+    * refcount of endpoint table ents referring to each action
+    * hitcount
+
+  route table:
+
+    * a red-black tree contains a dynamic list of address/netblock statuses.
+      * good experience with SGLIB (pure C, BSD-style license).
+    * each entry is keyed on { family, address/block, proto, port } tuple
+      * as in rule table, two bytes each for family, proto, and port.
+      * wildcards are allowed for address, proto, and port
+        * all fields to the right of a first wildcard must also be wildcards,
+	  except that ports can be enumerated with a wildcard proto when the
+	  tcplike_port_numbers flag bit is set.
+    * each entry includes the four byte unique ID of the instantiating rule.
+      * there may be multiple entries that match an address,
+        each associated with a distinct instantiating rule; however, a
+        given family-address-rule tuple is always associated with at most one
+        entry in the endpoint table.
+    * dynamic state
+      * hit count
+      * times of last hit and last state transition, used for time limiting
+
+    * each family has a default rule, accept or reject
+
+    
+
+
+  * lookup mechanics:
+    * first a lookup is performed in the rule table, which may result in stateless termination of evaluation (either accept or reject) based solely on packet attributes.
+    * if evaluation continues, the endpoint table is accessed, which may result in an accept or reject, an internal state update, or both.
+      * for each address family, a list of endpoint table prefix sizes is constructed from the rule table, allowing efficient lookup iteration in the endpoint table.
+
+  basic API:
+
+    * load/reload the policy from memory or a file descriptor
+    * export the current policy to memory or a file descriptor
+    * register an event with the rule engine, with a keyword, family, address, proto, and port, to match against the rule table
+    * test a family-address pair or family-address-keyword tuple for current disposition
+    * manually get, set, increment, or decrement the current hit count for a family-address-keyword tuple.
+    * manually remove a family-address or family-address-keyword tuple from the table, optionally qualified by associated disposition
+    * manually insert an family-address tuple into the table, with a given status (disposition, time-to-live)
+    * manually insert, replace, or delete an individual rule
+    * addresses are supplied and returned as tuples of generic byte vectors, always big endian.
+      * the address family width is fixed at 2 bytes.
+      * the user can supply a custom address comparison function, or leave in place the default comparator.
+      * internally, the key is constructed by bytewise concatenating the tuple; thus for a given address family the user must use consistent widths for the fields.
+
+  callback to get current time from platform-specific routine.
+
+  callback to give application visibility to events, particularly penalty starts and expirations, with per-rule logging configurability via the policy configuration.
+
+  hooks and cb installer to generate network responses.
+
+  function(s) suitable for installation as cb routines in libwolfssl (see below).
+
+  add hooks and cb installers to libwolfssl to allow libwolfssl to check with firewall on accept, and trigger firewall events as needed during negotiation.
+
+  memory models: default malloc, user-supplied malloc-style, and static in user-supplied buffer.
+
+
+
+first target platform: DeOS / LWIP
+
+
+five main phases:
+
+(1) implement internal primitives, and route table and associated API
+
+(2) implement event and action tables and associated API
+
+(3) implement config file/blob load/reload
+
+(4) optimize -- refactor lookup back end to red-black trees, add locking, etc.
+
+(5) implement integrations in libwolfssl, libwolfssh, and libwolfmqtt.
+
+
+
+smart/adaptive
+
+count number of times an unlistened port connection is attempted, to detect port scans
+
+hardest: watch for access patterns that match known attacks, possibly using honey pots
+
+
+
+important to facilitate callbacks that clear hitcount for a peer, or delete its route ent, when it succeeds at auth.
+
+dynamic whitelisting: remember that an IP addr has succeeded, and whitelist it with a designated ttl.
+
+side door: facilitate mechanisms that allow legitimate peers to establish session by cheap alternate method, e.g. PSK

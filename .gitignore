@@ -1,0 +1,17 @@
+*.lo
+*.la
+*.o
+*.a
+*.so
+*.So
+lib*.so*
+*.deps
+*.d
+configure
+*.gcno
+*.gcda
+*.gcov
+
+# Emacs
+*~
+.#*
